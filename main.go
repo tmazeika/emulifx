@@ -62,8 +62,8 @@ func main() {
 
 	for !win.ShouldClose() {
 		r := math.Abs(math.Sin(float64(time.Now().UnixNano())/1e9))
-		g := math.Abs(math.Sin(float64(time.Now().UnixNano())/1e9+2))
-		b := math.Abs(math.Sin(float64(time.Now().UnixNano())/1e9+4))
+		g := math.Abs(math.Sin(float64(time.Now().UnixNano())/1e9+2*math.Pi/3))
+		b := math.Abs(math.Sin(float64(time.Now().UnixNano())/1e9+4*math.Pi/3))
 		gl.ClearColor(float32(r), float32(g), float32(b), 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
