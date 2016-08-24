@@ -13,32 +13,38 @@ import (
 	"sync"
 )
 
-var bulb lifxbulb
+type (
+	lifxbulb struct {
+		port  uint32
+		white bool
 
-type lifxbulb struct {
-	port  uint32
-	white bool
+		power bool
+		color controlifx.HSBK
 
-	power bool
-	color controlifx.HSBK
+		txMutex sync.RWMutex
+		tx      uint32
+		rxMutex sync.RWMutex
+		rx      uint32
 
-	txMutex sync.RWMutex
-	tx      uint32
-	rx      uint32
+		label          string
+		group          string
+		groupUpdatedAt time.Time
 
-	label          string
-	group          string
-	groupUpdatedAt time.Time
+		poweredOnAt time.Time
+	}
 
-	poweredOnAt time.Time
-}
+	writer func(alwaysRes bool, t uint16, msg encoding.BinaryMarshaler) error
+)
 
-type writer func(t uint16, msg encoding.BinaryMarshaler) error
+var (
+	bulb lifxbulb
+
+	winStopCh  = make(chan interface{})
+	winPowerCh = make(chan ui.PowerAction)
+	winColorCh = make(chan ui.ColorAction)
+)
 
 func Start(label, group string, white bool) error {
-	winStopCh := make(chan interface{})
-	winRgbCh := make(chan controlifx.HSBK)
-
 	defer func() {
 		winStopCh <- 0
 	}()
@@ -77,11 +83,14 @@ func Start(label, group string, white bool) error {
 		poweredOnAt:now,
 	}
 
+	var windowClosed bool
+
 	go func() {
-		if err := ui.ShowWindow(winStopCh, winRgbCh); err != nil {
+		if err := ui.ShowWindow(winStopCh, winPowerCh, winColorCh); err != nil {
 			log.Fatalln(err)
 		}
 
+		windowClosed = true
 		l.Close()
 	}()
 
@@ -91,6 +100,9 @@ func Start(label, group string, white bool) error {
 		b := make([]byte, controlifx.LanHeaderSize+64)
 		n, raddr, err := l.ReadFromUDP(b)
 		if err != nil {
+			if windowClosed {
+				return nil
+			}
 			if err.(net.Error).Temporary() {
 				continue
 			}
@@ -98,7 +110,9 @@ func Start(label, group string, white bool) error {
 			return err
 		}
 
+		bulb.rxMutex.Lock()
 		bulb.rx += uint32(n)
+		bulb.rxMutex.Unlock()
 
 		go func() {
 			b = b[:n]
@@ -108,16 +122,11 @@ func Start(label, group string, white bool) error {
 				return
 			}
 
-			handle(recMsg, func(t uint16, payload encoding.BinaryMarshaler) error {
-				payloadB, err := payload.MarshalBinary()
-				if err != nil {
-					return err
-				}
-
+			handle(recMsg, func(alwaysRes bool, t uint16, payload encoding.BinaryMarshaler) error {
 				msg := controlifx.SendableLanMessage{
 					Header:controlifx.LanHeader{
 						Frame:controlifx.LanHeaderFrame{
-							Size:uint16(controlifx.LanHeaderSize+len(payloadB)),
+							Size:controlifx.LanHeaderSize,
 							Source:recMsg.Header.Frame.Source,
 						},
 						FrameAddress:controlifx.LanHeaderFrameAddress{
@@ -128,15 +137,59 @@ func Start(label, group string, white bool) error {
 							Type:t,
 						},
 					},
-					Payload:payload,
 				}
 
-				b, err := msg.MarshalBinary()
-				if err != nil {
-					return err
+				msgToBytes := func() ([]byte, error) {
+					b, err := msg.MarshalBinary()
+					if err != nil {
+						return []byte{}, err
+					}
+
+					return b, nil
+				}
+				getPayloadSize := func() (int, error) {
+					b, err := payload.MarshalBinary()
+					if err != nil {
+						return 0, err
+					}
+
+					return len(b), nil
+				}
+				var tx int
+
+				if recMsg.Header.FrameAddress.AckRequired {
+					b, err := msgToBytes()
+					if err != nil {
+						return err
+					}
+
+					tx += len(b)
+
+					if _, err := l.WriteTo(b, raddr); err != nil {
+						return err
+					}
 				}
 
-				_, err = l.WriteTo(b, raddr)
+				if alwaysRes || recMsg.Header.FrameAddress.ResRequired {
+					msg.Payload = payload
+
+					payloadSize, err := getPayloadSize()
+					if err != nil {
+						return err
+					}
+					msg.Header.Frame.Size += uint16(payloadSize)
+
+					b, err := msgToBytes()
+					if err != nil {
+						return err
+					}
+
+					tx += len(b)
+
+					if _, err := l.WriteTo(b, raddr); err != nil {
+						return err
+					}
+				}
 
 				bulb.txMutex.Lock()
 				bulb.tx += uint32(len(b))
@@ -154,11 +207,21 @@ func handle(msg receivableLanMessage, writer writer) {
 		getService(writer)
 	case controlifx.GetHostInfoType:
 		getHostInfo(writer)
+	case controlifx.GetHostFirmwareType:
+		getHostFirmware(writer)
+	case controlifx.GetWifiInfoType:
+		getWifiInfo(writer)
+	case controlifx.GetWifiFirmwareType:
+		getWifiFirmware(writer)
+	case controlifx.GetPowerType:
+		getPower(writer)
+	case controlifx.SetPowerType:
+		setPower(msg, writer)
 	}
 }
 
 func getService(writer writer) {
-	if err := writer(controlifx.StateServiceType, &stateServiceLanMessage{
+	if err := writer(true, controlifx.StateServiceType, &stateServiceLanMessage{
 		Service:1,
 		Port:bulb.port,
 	}); err != nil {
@@ -167,13 +230,79 @@ func getService(writer writer) {
 }
 
 func getHostInfo(writer writer) {
-	/*bulb.txMutex.RLock()
+	if err := writer(true, controlifx.StateHostInfoType, &stateHostInfoLanMessage{}); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func getHostFirmware(writer writer) {
+	if err := writer(true, controlifx.StateHostFirmwareType, &stateHostFirmwareLanMessage{
+		Build:1300233600000000000,
+		Version:1,
+	}); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func getWifiInfo(writer writer) {
+	const signal = 7.943287e-6
+
+	// Tx.
+	bulb.txMutex.RLock()
 	tx := bulb.tx
-	bulb.txMutex.RUnlock()*/
+	bulb.txMutex.RUnlock()
 
-	// 7.943287e-6
+	// Rx.
+	bulb.rxMutex.RLock()
+	rx := bulb.rx
+	bulb.rxMutex.RUnlock()
 
-	if err := writer(controlifx.StateHostInfoType, &stateHostInfoLanMessage{}); err != nil {
+	if err := writer(true, controlifx.StateWifiInfoType, &stateWifiInfoLanMessage{
+		Signal:signal,
+		Tx:tx,
+		Rx:rx,
+	}); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func getWifiFirmware(writer writer) {
+	if err := writer(true, controlifx.StateWifiFirmwareType, &stateWifiFirmwareLanMessage{
+		Build:1300233600000000000,
+		Version:1,
+	}); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func getPower(writer writer) {
+	var level uint16
+	if bulb.power {
+		level = 0xffff
+	}
+
+	if err := writer(true, controlifx.StatePowerType, &statePowerLanMessage{
+		Level:controlifx.PowerLevel(level),
+	}); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func setPower(msg receivableLanMessage, writer writer) {
+	on := (uint16(msg.Payload.(*setPowerLanMessage).Level) == 0xffff)
+
+	winPowerCh <- ui.PowerAction{
+		On:on,
+	}
+
+	var level uint16
+	if bulb.power {
+		level = 0xffff
+	}
+
+	if err := writer(false, controlifx.StatePowerType, &statePowerLanMessage{
+		Level:controlifx.PowerLevel(level),
+	}); err != nil {
 		log.Fatalln(err)
 	}
 }

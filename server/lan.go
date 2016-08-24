@@ -10,8 +10,8 @@ import (
 )
 
 type (
-	sendableLanMessage      encoding.BinaryMarshaler
-	receivableLanMessage    controlifx.ReceivableLanMessage
+	sendableLanMessage   encoding.BinaryMarshaler
+	receivableLanMessage controlifx.ReceivableLanMessage
 
 	setPowerLanMessage      controlifx.SetPowerLanMessage
 	setLabelLanMessage      controlifx.SetLabelLanMessage
@@ -19,8 +19,12 @@ type (
 	lightSetColorLanMessage controlifx.LightSetColorLanMessage
 	lightSetPowerLanMessage controlifx.LightSetPowerLanMessage
 
-	stateServiceLanMessage  controlifx.StateServiceLanMessage
-	stateHostInfoLanMessage controlifx.StateHostInfoLanMessage
+	stateServiceLanMessage      controlifx.StateServiceLanMessage
+	stateHostInfoLanMessage     controlifx.StateHostInfoLanMessage
+	stateHostFirmwareLanMessage controlifx.StateHostFirmwareLanMessage
+	stateWifiInfoLanMessage     controlifx.StateWifiInfoLanMessage
+	stateWifiFirmwareLanMessage controlifx.StateWifiFirmwareLanMessage
+	statePowerLanMessage        controlifx.StatePowerLanMessage
 )
 
 func (o *receivableLanMessage) UnmarshalBinary(data []byte) error {
@@ -135,7 +139,7 @@ func (o stateServiceLanMessage) MarshalBinary() (data []byte, _ error) {
 	// Port.
 	binary.LittleEndian.PutUint32(data[1:], o.Port)
 
-	return data, nil
+	return
 }
 
 func (o stateHostInfoLanMessage) MarshalBinary() (data []byte, _ error) {
@@ -150,5 +154,52 @@ func (o stateHostInfoLanMessage) MarshalBinary() (data []byte, _ error) {
 	// Rx.
 	binary.LittleEndian.PutUint32(data[8:12], o.Rx)
 
-	return data, nil
+	return
+}
+
+func (o stateHostFirmwareLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 12)
+
+	// Build.
+	binary.LittleEndian.PutUint64(data[:8], o.Build)
+
+	// Version.
+	binary.LittleEndian.PutUint32(data[8:], o.Version)
+
+	return
+}
+
+func (o stateWifiInfoLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 12)
+
+	// Signal.
+	binary.LittleEndian.PutUint32(data[:4], math.Float32bits(o.Signal))
+
+	// Tx.
+	binary.LittleEndian.PutUint32(data[4:8], o.Tx)
+
+	// Rx.
+	binary.LittleEndian.PutUint32(data[8:12], o.Rx)
+
+	return
+}
+
+func (o stateWifiFirmwareLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 12)
+
+	// Build.
+	binary.LittleEndian.PutUint64(data[:8], o.Build)
+
+	// Version.
+	binary.LittleEndian.PutUint32(data[8:], o.Version)
+
+	return
+}
+
+func (o statePowerLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 2)
+
+	binary.LittleEndian.PutUint16(data, uint16(o.Level))
+
+	return
 }
