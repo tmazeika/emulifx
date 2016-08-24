@@ -10,12 +10,17 @@ import (
 	"os"
 	"image"
 	"image/draw"
+	"time"
+	"sync"
+	"math"
 )
 
 const (
-	title  = "Emulifx"
-	width  = 512
-	height = 512
+	Title  = "Emulifx"
+	Width  = 512
+	Height = 512
+
+	FastestBrightnessChangeDuration = 350*1e6
 )
 
 type (
@@ -46,7 +51,7 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	glfw.WindowHint(glfw.ContextVersionMajor, 2)
 	glfw.WindowHint(glfw.ContextVersionMinor, 1)
 
-	win, err := glfw.CreateWindow(width, height, title+" (off)", nil, nil)
+	win, err := glfw.CreateWindow(Width, Height, Title +" (off)", nil, nil)
 	if err != nil {
 		return err
 	}
@@ -64,24 +69,29 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	}
 
 	var (
+		colorMutex sync.Mutex
 		lastBrightness uint16 = 0xffff
-		hsbk = controlifx.HSBK{
-			Kelvin:2500,
-		}
-		r, g, b float32
+		power bool
+		hCurrent, sCurrent, bCurrent, kCurrent, hStart, sStart, bStart, kStart, hEnd, sEnd, bEnd, kEnd uint16
+		durationStart, duration, bDuration int64
 
 		updateTitle = func() {
-			str := title+": "+label+"@"+group+" ("
+			str := Title +": "+label+"@"+group+" ("
 
-			if hsbk.Brightness == 0 {
-				str += "off)"
-			} else {
+			if power {
 				str += "on)"
+			} else {
+				str += "off)"
 			}
 
 			win.SetTitle(str)
 		}
 	)
+
+	// Initialize saturation and Kelvin.
+	kCurrent = 2500
+	kStart = kCurrent
+	kEnd = kCurrent
 
 	updateTitle()
 
@@ -91,33 +101,45 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 			case action := <-actionCh:
 				switch action.(type) {
 				case PowerAction:
-					if action.(PowerAction).On {
-						hsbk.Brightness = lastBrightness
-					} else {
-						if hsbk.Brightness > 0 {
-							lastBrightness = hsbk.Brightness
-						}
+					powerAction := action.(PowerAction)
+					power = powerAction.On
+					now := time.Now()
 
-						hsbk.Brightness = 0
+					colorMutex.Lock()
+					durationStart = now.UnixNano()
+					bDuration = int64(math.Max(FastestBrightnessChangeDuration, float64(powerAction.Duration)*1e6))
+
+					if power {
+						bStart = bCurrent
+						bEnd = lastBrightness
+					} else {
+						lastBrightness = bCurrent
+						bStart = bCurrent
+						bEnd = 0
 					}
+					colorMutex.Unlock()
 
 					updateTitle()
 				case ColorAction:
-					color := action.(ColorAction).Color
+					colorAction := action.(ColorAction)
+					color := colorAction.Color
+					now := time.Now()
 
-					if hsbk.Brightness == 0 {
-						hsbk = controlifx.HSBK{
-							Hue:color.Hue,
-							Saturation:color.Saturation,
-							Kelvin:color.Kelvin,
-						}
-					} else {
-						hsbk = color
-					}
+					colorMutex.Lock()
+					hStart = hCurrent
+					sStart = sCurrent
+					bStart = bCurrent
+					kStart = kCurrent
+					hEnd = color.Hue
+					sEnd = color.Saturation
+					bEnd = color.Brightness
+					kEnd = color.Kelvin
 
-					if color.Brightness > 0 {
-						lastBrightness = color.Brightness
-					}
+					durationStart = now.UnixNano()
+					duration = int64(colorAction.Duration)*1e6
+					bDuration = duration
+
+					colorMutex.Unlock()
 				case LabelAction:
 					label = string(action.(LabelAction))
 
@@ -126,8 +148,6 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 			case <-stopCh:
 				win.SetShouldClose(true)
 			}
-
-			r, g, b = hslToRgb(hsbk.Hue, hsbk.Saturation, hsbk.Brightness)
 		}
 	}()
 
@@ -141,8 +161,27 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 	for !win.ShouldClose() {
-		// TODO: implement Kelvin and duration
-		gl.ClearColor(r, g, b, 1)
+		now := time.Now().UnixNano()
+
+		colorMutex.Lock()
+		if now < durationStart+duration {
+			hCurrent = lerp(durationStart, duration, now, hStart, int32(hEnd)-int32(hStart))
+			sCurrent = lerp(durationStart, duration, now, sStart, int32(sEnd)-int32(sStart))
+			kCurrent = lerp(durationStart, duration, now, kStart, int32(kEnd)-int32(kStart))
+		} else {
+			hCurrent = hEnd
+			sCurrent = sEnd
+			kCurrent = kEnd
+		}
+
+		if now < durationStart+bDuration {
+			bCurrent = lerp(durationStart, bDuration, now, bStart, int32(bEnd)-int32(bStart))
+		} else {
+			bCurrent = bEnd
+		}
+
+		setColor(hCurrent, sCurrent, bCurrent, kCurrent)
+		colorMutex.Unlock()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
 		// Draw image.
@@ -164,6 +203,17 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	}
 
 	return nil
+}
+
+// Use Kelvin.
+func setColor(h, s, b, k uint16) {
+	red, green, blue := hslToRgb(h, s, b)
+
+	gl.ClearColor(red, green, blue, 1)
+}
+
+func lerp(durationStart, duration, now int64, vStart uint16, vChange int32) uint16 {
+	return uint16(float32(now-durationStart)/float32(duration)*float32(vChange)+float32(vStart))
 }
 
 func hslToRgb(hI, sI, lI uint16) (r, g, b float32) {
