@@ -216,6 +216,14 @@ func handle(msg receivableLanMessage, writer writer) error {
 		return getGroup(writer)
 	case controlifx.EchoRequestType:
 		return echoRequest(msg, writer)
+	case controlifx.LightGetType:
+		return lightGet(writer)
+	case controlifx.LightSetColorType:
+		return lightSetColor(msg, writer)
+	case controlifx.LightGetPowerType:
+		return lightGetPower(writer)
+	case controlifx.LightSetPowerType:
+		return lightSetPower(msg, writer)
 	}
 
 	return nil
@@ -339,5 +347,55 @@ func getGroup(writer writer) error {
 func echoRequest(msg receivableLanMessage, writer writer) error {
 	return writer(true, controlifx.EchoResponseType, &echoResponseLanMessage{
 		Payload:msg.Payload.(*echoRequestLanMessage).Payload,
+	})
+}
+
+func lightGet(writer writer) error {
+	return writer(true, controlifx.LightStateType, &lightStateLanMessage{
+		Color:bulb.color,
+		Power:bulb.powerLevel,
+		Label:bulb.label,
+	})
+}
+
+func lightSetColor(msg receivableLanMessage, writer writer) error {
+	payload := msg.Payload.(*lightSetColorLanMessage)
+	bulb.color = payload.Color
+
+	winActionCh <- ui.ColorAction{
+		Color:payload.Color,
+		Duration:payload.Duration,
+	}
+
+	return writer(false, controlifx.LightStateType, &lightStateLanMessage{
+		Color:bulb.color,
+		Power:bulb.powerLevel,
+		Label:bulb.label,
+	})
+}
+
+func lightGetPower(writer writer) error {
+	return writer(true, controlifx.LightStatePowerType, &lightStatePowerLanMessage{
+		Level:bulb.powerLevel,
+	})
+}
+
+func lightSetPower(msg receivableLanMessage, writer writer) error {
+	payload := msg.Payload.(*lightSetPowerLanMessage)
+
+	winActionCh <- ui.PowerAction{
+		On:payload.Level.On(),
+		Duration:payload.Duration,
+	}
+
+	var level uint16
+	if payload.Level.On() {
+		level = 0xffff
+	}
+
+	bulb.powerLevel = controlifx.PowerLevel(level)
+
+	return writer(false, controlifx.LightStatePowerType, &statePowerLanMessage{
+		Level:controlifx.PowerLevel(level),
 	})
 }

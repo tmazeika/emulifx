@@ -21,12 +21,12 @@ const (
 type (
 	PowerAction struct {
 		On       bool
-		Duration uint16
+		Duration uint32
 	}
 
 	ColorAction struct {
 		Color    controlifx.HSBK
-		Duration uint16
+		Duration uint32
 	}
 
 	LabelAction controlifx.Label
@@ -103,8 +103,21 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 
 					updateTitle()
 				case ColorAction:
-					hsbk = action.(ColorAction).Color
-					lastBrightness = hsbk.Brightness
+					color := action.(ColorAction).Color
+
+					if hsbk.Brightness == 0 {
+						hsbk = controlifx.HSBK{
+							Hue:color.Hue,
+							Saturation:color.Saturation,
+							Kelvin:color.Kelvin,
+						}
+					} else {
+						hsbk = color
+					}
+
+					if color.Brightness > 0 {
+						lastBrightness = color.Brightness
+					}
 				case LabelAction:
 					label = string(action.(LabelAction))
 
