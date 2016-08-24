@@ -18,7 +18,7 @@ var (
 	}
 	whiteCmd = &cobra.Command{
 		Use:"white",
-		Short:"emulates the LIFX White 800",
+		Short:"emulates the LIFX White 800 bulb",
 		Run:func(cmd *cobra.Command, args []string) {
 			if err := server.Start(label, group, true); err != nil {
 				log.Fatalln(err)

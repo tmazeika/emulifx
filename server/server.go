@@ -82,7 +82,7 @@ func Start(label, group string, white bool) error {
 	var windowClosed bool
 
 	go func() {
-		if err := ui.ShowWindow(label, group, winStopCh, winActionCh); err != nil {
+		if err := ui.ShowWindow(white, label, group, winStopCh, winActionCh); err != nil {
 			log.Fatalln(err)
 		}
 

@@ -41,7 +41,7 @@ func init() {
 	runtime.LockOSThread()
 }
 
-func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
+func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
 	if ok := glfw.Init(); !ok {
 		return errors.New("error initializing GLFW")
 	}
@@ -214,7 +214,12 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 			bCurrent = bEnd
 		}
 
-		setColor(hCurrent, sCurrent, bCurrent, kCurrent)
+		if white {
+			setColor(0, 0, bCurrent, kCurrent)
+		} else {
+			setColor(hCurrent, sCurrent, bCurrent, kCurrent)
+		}
+
 		colorMutex.Unlock()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
