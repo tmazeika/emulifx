@@ -290,6 +290,7 @@ func getPower(writer writer) {
 
 func setPower(msg receivableLanMessage, writer writer) {
 	on := (uint16(msg.Payload.(*setPowerLanMessage).Level) == 0xffff)
+	bulb.power = on
 
 	winPowerCh <- ui.PowerAction{
 		On:on,
