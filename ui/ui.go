@@ -73,6 +73,8 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 		lastBrightness uint16 = 0xffff
 		power bool
 		hCurrent, sCurrent, bCurrent, kCurrent, hStart, sStart, bStart, kStart, hEnd, sEnd, bEnd, kEnd uint16
+		hChange, sChange, bChange, kChange int32
+		farHChange, hChangeLeft bool
 		durationStart, duration, bDuration int64
 
 		updateTitle = func() {
@@ -117,6 +119,8 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 						bStart = bCurrent
 						bEnd = 0
 					}
+
+					bChange = int32(bEnd)-int32(bStart)
 					colorMutex.Unlock()
 
 					updateTitle()
@@ -134,6 +138,25 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 					sEnd = color.Saturation
 					bEnd = color.Brightness
 					kEnd = color.Kelvin
+					sChange = int32(sEnd)-int32(sStart)
+					bChange = int32(bEnd)-int32(bStart)
+					kChange = int32(kEnd)-int32(kStart)
+
+					// The hue's change takes the shortest distance.
+					if farHChange = difference(hStart, hEnd) > 0xffff/2; farHChange {
+						start := int32(hStart)
+						end := int32(hEnd)
+
+						if hChangeLeft = end-start > 0; hChangeLeft {
+							// Moving right, switch to left.
+							hChange = -0xffff-start+end
+						} else {
+							// Moving left, switch to right.
+							hChange = 0xffff-start+end
+						}
+					} else {
+						hChange = int32(hEnd)-int32(hStart)
+					}
 
 					durationStart = now.UnixNano()
 					duration = int64(colorAction.Duration)*1e6
@@ -165,9 +188,20 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 
 		colorMutex.Lock()
 		if now < durationStart+duration {
-			hCurrent = lerp(durationStart, duration, now, hStart, int32(hEnd)-int32(hStart))
-			sCurrent = lerp(durationStart, duration, now, sStart, int32(sEnd)-int32(sStart))
-			kCurrent = lerp(durationStart, duration, now, kStart, int32(kEnd)-int32(kStart))
+			if farHChange {
+				hCurrentI := lerp(durationStart, duration, now, hStart, hChange)
+
+				if hChangeLeft {
+					hCurrent = uint16(0xffff+hCurrentI%0xffff)
+				} else {
+					hCurrent = uint16(hCurrentI)
+				}
+			} else {
+				hCurrent = uint16(lerp(durationStart, duration, now, hStart, hChange))
+			}
+
+			sCurrent = uint16(lerp(durationStart, duration, now, sStart, sChange))
+			kCurrent = uint16(lerp(durationStart, duration, now, kStart, kChange))
 		} else {
 			hCurrent = hEnd
 			sCurrent = sEnd
@@ -175,7 +209,7 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 		}
 
 		if now < durationStart+bDuration {
-			bCurrent = lerp(durationStart, bDuration, now, bStart, int32(bEnd)-int32(bStart))
+			bCurrent = uint16(lerp(durationStart, bDuration, now, bStart, bChange))
 		} else {
 			bCurrent = bEnd
 		}
@@ -205,6 +239,16 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	return nil
 }
 
+func difference(a, b uint16) int32 {
+	diff := int32(a)-int32(b)
+
+	if diff < 0 {
+		return -diff
+	} else {
+		return diff
+	}
+}
+
 func setColor(h, s, b, k uint16) {
 	red, green, blue := hslToRgb(h, s, b)
 	kRed, kGreen, kBlue := kToRgb(float32(k))
@@ -212,8 +256,8 @@ func setColor(h, s, b, k uint16) {
 	gl.ClearColor(red*kRed, green*kGreen, blue*kBlue, 1)
 }
 
-func lerp(durationStart, duration, now int64, vStart uint16, vChange int32) uint16 {
-	return uint16(float32(now-durationStart)/float32(duration)*float32(vChange)+float32(vStart))
+func lerp(durationStart, duration, now int64, vStart uint16, vChange int32) int32 {
+	return int32(float32(now-durationStart)/float32(duration)*float32(vChange)+float32(vStart))
 }
 
 // Credit to http://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/.
