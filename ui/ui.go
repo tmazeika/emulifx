@@ -6,12 +6,16 @@ import (
 	"github.com/go-gl/gl/v2.1/gl"
 	"errors"
 	"github.com/bionicrm/controlifx"
+	_ "image/png"
+	"os"
+	"image"
+	"image/draw"
 )
 
 const (
 	title  = "Emulifx"
-	width  = 500
-	height = 500
+	width  = 512
+	height = 512
 )
 
 type (
@@ -36,7 +40,11 @@ func ShowWindow(stopCh <-chan interface{}, powerCh <-chan PowerAction, colorCh <
 	}
 	defer glfw.Terminate()
 
-	win, err := glfw.CreateWindow(width, height, title, nil, nil)
+	// Configure window.
+	glfw.WindowHint(glfw.ContextVersionMajor, 2)
+	glfw.WindowHint(glfw.ContextVersionMinor, 1)
+
+	win, err := glfw.CreateWindow(width, height, title+" (off)", nil, nil)
 	if err != nil {
 		return err
 	}
@@ -67,12 +75,16 @@ func ShowWindow(stopCh <-chan interface{}, powerCh <-chan PowerAction, colorCh <
 			case powerAction := <-powerCh:
 				if powerAction.On {
 					hsbk.Brightness = lastBrightness
+
+					win.SetTitle(title+" (on)")
 				} else {
 					if hsbk.Brightness > 0 {
 						lastBrightness = hsbk.Brightness
 					}
 
 					hsbk.Brightness = 0
+
+					win.SetTitle(title+" (off)")
 				}
 			case colorAction := <-colorCh:
 				hsbk = colorAction.Color
@@ -85,10 +97,33 @@ func ShowWindow(stopCh <-chan interface{}, powerCh <-chan PowerAction, colorCh <
 		}
 	}()
 
+	tex, err := newTexture("ui/lifx.png")
+	if err != nil {
+		return err
+	}
+	defer gl.DeleteTextures(1, &tex)
+
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
 	for !win.ShouldClose() {
 		// TODO: implement Kelvin and duration
 		gl.ClearColor(r, g, b, 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
+
+		// Draw image.
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+		gl.Begin(gl.QUADS)
+		gl.Normal3f(0, 0, 1)
+		gl.TexCoord2f(0, 0)
+		gl.Vertex3f(-0.5, 0.5, 1)
+		gl.TexCoord2f(1, 0)
+		gl.Vertex3f(0.5, 0.5, 1)
+		gl.TexCoord2f(1, 1)
+		gl.Vertex3f(0.5, -0.5, 1)
+		gl.TexCoord2f(0, 1)
+		gl.Vertex3f(-0.5, -0.5, 1)
+		gl.End()
 
 		win.SwapBuffers()
 		glfw.PollEvents()
@@ -139,4 +174,36 @@ func hslToRgb(hI, sI, lI uint16) (r, g, b float32) {
 	}
 
 	return
+}
+
+func newTexture(file string) (uint32, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return 0, err
+	}
+
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return 0, err
+	}
+
+	rgba := image.NewRGBA(img.Bounds())
+	if rgba.Stride != rgba.Rect.Size().X*4 {
+		return 0, errors.New("unsupported stride")
+	}
+
+	draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
+
+	var tex uint32
+	gl.Enable(gl.TEXTURE_2D)
+	gl.GenTextures(1, &tex)
+	gl.BindTexture(gl.TEXTURE_2D, tex)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(rgba.Rect.Size().X),
+		int32(rgba.Rect.Size().Y), 0, gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(rgba.Pix))
+
+	return tex, nil
 }
