@@ -10,7 +10,6 @@ import (
 	"github.com/bionicrm/emulifx/ui"
 	"math/rand"
 	"time"
-	"sync"
 )
 
 type (
@@ -18,15 +17,13 @@ type (
 		port  uint32
 		white bool
 
-		power bool
-		color controlifx.HSBK
+		powerLevel controlifx.PowerLevel
+		color      controlifx.HSBK
 
-		txMutex sync.RWMutex
-		tx      uint32
-		rxMutex sync.RWMutex
-		rx      uint32
+		tx uint32
+		rx uint32
 
-		label          string
+		label          controlifx.Label
 		group          string
 		groupUpdatedAt time.Time
 
@@ -39,9 +36,8 @@ type (
 var (
 	bulb lifxbulb
 
-	winStopCh  = make(chan interface{})
-	winPowerCh = make(chan ui.PowerAction)
-	winColorCh = make(chan ui.ColorAction)
+	winStopCh   = make(chan interface{})
+	winActionCh = make(chan interface{})
 )
 
 func Start(label, group string, white bool) error {
@@ -77,7 +73,7 @@ func Start(label, group string, white bool) error {
 	bulb = lifxbulb{
 		port:uint32(portI),
 		white:white,
-		label:label,
+		label:controlifx.Label(label),
 		group:group,
 		groupUpdatedAt:now,
 		poweredOnAt:now,
@@ -86,7 +82,7 @@ func Start(label, group string, white bool) error {
 	var windowClosed bool
 
 	go func() {
-		if err := ui.ShowWindow(winStopCh, winPowerCh, winColorCh); err != nil {
+		if err := ui.ShowWindow(label, group, winStopCh, winActionCh); err != nil {
 			log.Fatalln(err)
 		}
 
@@ -110,200 +106,238 @@ func Start(label, group string, white bool) error {
 			return err
 		}
 
-		bulb.rxMutex.Lock()
 		bulb.rx += uint32(n)
-		bulb.rxMutex.Unlock()
+		b = b[:n]
 
-		go func() {
-			b = b[:n]
+		recMsg := receivableLanMessage{}
+		if err := recMsg.UnmarshalBinary(b); err != nil {
+			continue
+		}
 
-			recMsg := receivableLanMessage{}
-			if err := recMsg.UnmarshalBinary(b); err != nil {
-				return
+		if err := handle(recMsg, func(alwaysRes bool, t uint16, payload encoding.BinaryMarshaler) error {
+			msg := controlifx.SendableLanMessage{
+				Header:controlifx.LanHeader{
+					Frame:controlifx.LanHeaderFrame{
+						Size:controlifx.LanHeaderSize,
+						Source:recMsg.Header.Frame.Source,
+					},
+					FrameAddress:controlifx.LanHeaderFrameAddress{
+						Target:target,
+						Sequence:recMsg.Header.FrameAddress.Sequence,
+					},
+					ProtocolHeader:controlifx.LanHeaderProtocolHeader{
+						Type:t,
+					},
+				},
 			}
 
-			handle(recMsg, func(alwaysRes bool, t uint16, payload encoding.BinaryMarshaler) error {
-				msg := controlifx.SendableLanMessage{
-					Header:controlifx.LanHeader{
-						Frame:controlifx.LanHeaderFrame{
-							Size:controlifx.LanHeaderSize,
-							Source:recMsg.Header.Frame.Source,
-						},
-						FrameAddress:controlifx.LanHeaderFrameAddress{
-							Target:target,
-							Sequence:recMsg.Header.FrameAddress.Sequence,
-						},
-						ProtocolHeader:controlifx.LanHeaderProtocolHeader{
-							Type:t,
-						},
-					},
+			getPayloadSize := func() (int, error) {
+				b, err := payload.MarshalBinary()
+				if err != nil {
+					return 0, err
 				}
 
-				msgToBytes := func() ([]byte, error) {
-					b, err := msg.MarshalBinary()
-					if err != nil {
-						return []byte{}, err
-					}
+				return len(b), nil
+			}
+			var tx int
 
-					return b, nil
+			if alwaysRes || recMsg.Header.FrameAddress.ResRequired {
+				msg.Payload = payload
+
+				payloadSize, err := getPayloadSize()
+				if err != nil {
+					return err
 				}
-				getPayloadSize := func() (int, error) {
-					b, err := payload.MarshalBinary()
-					if err != nil {
-						return 0, err
-					}
+				msg.Header.Frame.Size += uint16(payloadSize)
 
-					return len(b), nil
-				}
-				var tx int
-
-				if recMsg.Header.FrameAddress.AckRequired {
-					b, err := msgToBytes()
-					if err != nil {
-						return err
-					}
-
-					tx += len(b)
-
-					if _, err := l.WriteTo(b, raddr); err != nil {
-						return err
-					}
+				b, err := msg.MarshalBinary()
+				if err != nil {
+					return err
 				}
 
-				if alwaysRes || recMsg.Header.FrameAddress.ResRequired {
-					msg.Payload = payload
+				tx += len(b)
 
-					payloadSize, err := getPayloadSize()
-					if err != nil {
-						return err
-					}
-					msg.Header.Frame.Size += uint16(payloadSize)
+				if _, err := l.WriteTo(b, raddr); err != nil {
+					return err
+				}
+			}
 
-					b, err := msgToBytes()
-					if err != nil {
-						return err
-					}
+			if recMsg.Header.FrameAddress.AckRequired {
+				msg.Header.ProtocolHeader.Type = controlifx.AcknowledgementType
 
-					tx += len(b)
-
-					if _, err := l.WriteTo(b, raddr); err != nil {
-						return err
-					}
+				b, err := msg.MarshalBinary()
+				if err != nil {
+					return err
 				}
 
-				bulb.txMutex.Lock()
-				bulb.tx += uint32(len(b))
-				bulb.txMutex.Unlock()
+				tx += len(b)
 
-				return err
-			})
-		}()
+				if _, err := l.WriteTo(b, raddr); err != nil {
+					return err
+				}
+			}
+
+			bulb.tx += uint32(len(b))
+
+			return err
+		}); err != nil {
+			log.Println(err)
+		}
 	}
 }
 
-func handle(msg receivableLanMessage, writer writer) {
+func handle(msg receivableLanMessage, writer writer) error {
 	switch msg.Header.ProtocolHeader.Type {
 	case controlifx.GetServiceType:
-		getService(writer)
+		return getService(writer)
 	case controlifx.GetHostInfoType:
-		getHostInfo(writer)
+		return getHostInfo(writer)
 	case controlifx.GetHostFirmwareType:
-		getHostFirmware(writer)
+		return getHostFirmware(writer)
 	case controlifx.GetWifiInfoType:
-		getWifiInfo(writer)
+		return getWifiInfo(writer)
 	case controlifx.GetWifiFirmwareType:
-		getWifiFirmware(writer)
+		return getWifiFirmware(writer)
 	case controlifx.GetPowerType:
-		getPower(writer)
+		return getPower(writer)
 	case controlifx.SetPowerType:
-		setPower(msg, writer)
+		return setPower(msg, writer)
+	case controlifx.GetLabelType:
+		return getLabel(writer)
+	case controlifx.SetLabelType:
+		return setLabel(msg, writer)
+	case controlifx.GetVersionType:
+		return getVersion(writer)
+	case controlifx.GetInfoType:
+		return getInfo(writer)
+	case controlifx.GetLocationType:
+		return getLocation(writer)
+	case controlifx.GetGroupType:
+		return getGroup(writer)
+	case controlifx.EchoRequestType:
+		return echoRequest(msg, writer)
 	}
+
+	return nil
 }
 
-func getService(writer writer) {
-	if err := writer(true, controlifx.StateServiceType, &stateServiceLanMessage{
+func getService(writer writer) error {
+	return writer(true, controlifx.StateServiceType, &stateServiceLanMessage{
 		Service:1,
 		Port:bulb.port,
-	}); err != nil {
-		log.Fatalln(err)
-	}
+	})
 }
 
-func getHostInfo(writer writer) {
-	if err := writer(true, controlifx.StateHostInfoType, &stateHostInfoLanMessage{}); err != nil {
-		log.Fatalln(err)
-	}
+func getHostInfo(writer writer) error {
+	return writer(true, controlifx.StateHostInfoType, &stateHostInfoLanMessage{})
 }
 
-func getHostFirmware(writer writer) {
-	if err := writer(true, controlifx.StateHostFirmwareType, &stateHostFirmwareLanMessage{
+func getHostFirmware(writer writer) error {
+	return writer(true, controlifx.StateHostFirmwareType, &stateHostFirmwareLanMessage{
 		Build:1300233600000000000,
 		Version:1,
-	}); err != nil {
-		log.Fatalln(err)
-	}
+	})
 }
 
-func getWifiInfo(writer writer) {
-	const signal = 7.943287e-6
+func getWifiInfo(writer writer) error {
+	const Signal = 7.943287e-6
 
-	// Tx.
-	bulb.txMutex.RLock()
-	tx := bulb.tx
-	bulb.txMutex.RUnlock()
-
-	// Rx.
-	bulb.rxMutex.RLock()
-	rx := bulb.rx
-	bulb.rxMutex.RUnlock()
-
-	if err := writer(true, controlifx.StateWifiInfoType, &stateWifiInfoLanMessage{
-		Signal:signal,
-		Tx:tx,
-		Rx:rx,
-	}); err != nil {
-		log.Fatalln(err)
-	}
+	return writer(true, controlifx.StateWifiInfoType, &stateWifiInfoLanMessage{
+		Signal:Signal,
+		Tx:bulb.tx,
+		Rx:bulb.rx,
+	})
 }
 
-func getWifiFirmware(writer writer) {
-	if err := writer(true, controlifx.StateWifiFirmwareType, &stateWifiFirmwareLanMessage{
+func getWifiFirmware(writer writer) error {
+	return writer(true, controlifx.StateWifiFirmwareType, &stateWifiFirmwareLanMessage{
 		Build:1300233600000000000,
 		Version:1,
-	}); err != nil {
-		log.Fatalln(err)
-	}
+	})
 }
 
-func getPower(writer writer) {
+func getPower(writer writer) error {
 	var level uint16
-	if bulb.power {
+	if bulb.powerLevel.On() {
 		level = 0xffff
 	}
 
-	if err := writer(true, controlifx.StatePowerType, &statePowerLanMessage{
+	return writer(true, controlifx.StatePowerType, &statePowerLanMessage{
 		Level:controlifx.PowerLevel(level),
-	}); err != nil {
-		log.Fatalln(err)
-	}
+	})
 }
 
-func setPower(msg receivableLanMessage, writer writer) {
-	on := (uint16(msg.Payload.(*setPowerLanMessage).Level) == 0xffff)
-	bulb.power = on
+func setPower(msg receivableLanMessage, writer writer) error {
+	on := msg.Payload.(*setPowerLanMessage).Level.On()
 
-	winPowerCh <- ui.PowerAction{
+	winActionCh <- ui.PowerAction{
 		On:on,
 	}
 
 	var level uint16
-	if bulb.power {
+	if on {
 		level = 0xffff
 	}
 
-	if err := writer(false, controlifx.StatePowerType, &statePowerLanMessage{
+	bulb.powerLevel = controlifx.PowerLevel(level)
+
+	return writer(false, controlifx.StatePowerType, &statePowerLanMessage{
 		Level:controlifx.PowerLevel(level),
-	}); err != nil {
-		log.Fatalln(err)
-	}
+	})
+}
+
+func getLabel(writer writer) error {
+	return writer(true, controlifx.StateLabelType, &stateLabelLanMessage{
+		Label:controlifx.Label(bulb.label),
+	})
+}
+
+func setLabel(msg receivableLanMessage, writer writer) error {
+	bulb.label = msg.Payload.(*setLabelLanMessage).Label
+
+	winActionCh <- ui.LabelAction(bulb.label)
+
+	return writer(false, controlifx.StateLabelType, &stateLabelLanMessage{
+		Label:controlifx.Label(bulb.label),
+	})
+}
+
+func getVersion(writer writer) error {
+	return writer(true, controlifx.StateVersionType, &stateVersionLanMessage{
+		Vendor:0,
+		Product:1,
+		Version:2,
+	})
+}
+
+func getInfo(writer writer) error {
+	now := time.Now()
+
+	return writer(true, controlifx.StateInfoType, &stateInfoLanMessage{
+		Time:controlifx.Time(now.UnixNano()),
+		Uptime:uint64(now.Sub(bulb.poweredOnAt).Nanoseconds()),
+		Downtime:0,
+	})
+}
+
+func getLocation(writer writer) error {
+	return writer(true, controlifx.StateLocationType, &stateLocationLanMessage{
+		Location:[16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15},
+		Label:controlifx.Label(bulb.group),
+		UpdatedAt:controlifx.Time(bulb.groupUpdatedAt.UnixNano()),
+	})
+}
+
+func getGroup(writer writer) error {
+	return writer(true, controlifx.StateGroupType, &stateGroupLanMessage{
+		Group:[16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+		Label:controlifx.Label(bulb.group),
+		UpdatedAt:controlifx.Time(bulb.groupUpdatedAt.UnixNano()),
+	})
+}
+
+func echoRequest(msg receivableLanMessage, writer writer) error {
+	return writer(true, controlifx.EchoResponseType, &echoResponseLanMessage{
+		Payload:msg.Payload.(*echoRequestLanMessage).Payload,
+	})
 }

@@ -28,13 +28,15 @@ type (
 		Color    controlifx.HSBK
 		Duration uint16
 	}
+
+	LabelAction controlifx.Label
 )
 
 func init() {
 	runtime.LockOSThread()
 }
 
-func ShowWindow(stopCh <-chan interface{}, powerCh <-chan PowerAction, colorCh <-chan ColorAction) error {
+func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
 	if ok := glfw.Init(); !ok {
 		return errors.New("error initializing GLFW")
 	}
@@ -67,28 +69,47 @@ func ShowWindow(stopCh <-chan interface{}, powerCh <-chan PowerAction, colorCh <
 			Kelvin:2500,
 		}
 		r, g, b float32
+
+		updateTitle = func() {
+			str := title+": "+label+"@"+group+" ("
+
+			if hsbk.Brightness == 0 {
+				str += "off)"
+			} else {
+				str += "on)"
+			}
+
+			win.SetTitle(str)
+		}
 	)
+
+	updateTitle()
 
 	go func() {
 		for {
 			select {
-			case powerAction := <-powerCh:
-				if powerAction.On {
-					hsbk.Brightness = lastBrightness
+			case action := <-actionCh:
+				switch action.(type) {
+				case PowerAction:
+					if action.(PowerAction).On {
+						hsbk.Brightness = lastBrightness
+					} else {
+						if hsbk.Brightness > 0 {
+							lastBrightness = hsbk.Brightness
+						}
 
-					win.SetTitle(title+" (on)")
-				} else {
-					if hsbk.Brightness > 0 {
-						lastBrightness = hsbk.Brightness
+						hsbk.Brightness = 0
 					}
 
-					hsbk.Brightness = 0
+					updateTitle()
+				case ColorAction:
+					hsbk = action.(ColorAction).Color
+					lastBrightness = hsbk.Brightness
+				case LabelAction:
+					label = string(action.(LabelAction))
 
-					win.SetTitle(title+" (off)")
+					updateTitle()
 				}
-			case colorAction := <-colorCh:
-				hsbk = colorAction.Color
-				lastBrightness = hsbk.Brightness
 			case <-stopCh:
 				win.SetShouldClose(true)
 			}

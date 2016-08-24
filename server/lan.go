@@ -25,6 +25,14 @@ type (
 	stateWifiInfoLanMessage     controlifx.StateWifiInfoLanMessage
 	stateWifiFirmwareLanMessage controlifx.StateWifiFirmwareLanMessage
 	statePowerLanMessage        controlifx.StatePowerLanMessage
+	stateLabelLanMessage        controlifx.StateLabelLanMessage
+	stateVersionLanMessage      controlifx.StateVersionLanMessage
+	stateInfoLanMessage         controlifx.StateInfoLanMessage
+	stateLocationLanMessage     controlifx.StateLocationLanMessage
+	stateGroupLanMessage        controlifx.StateGroupLanMessage
+	echoResponseLanMessage      controlifx.EchoResponseLanMessage
+	lightStateLanMessage        controlifx.LightStateLanMessage
+	lightStatePowerLanMessage   controlifx.LightStatePowerLanMessage
 )
 
 func (o *receivableLanMessage) UnmarshalBinary(data []byte) error {
@@ -196,10 +204,125 @@ func (o stateWifiFirmwareLanMessage) MarshalBinary() (data []byte, _ error) {
 	return
 }
 
-func (o statePowerLanMessage) MarshalBinary() (data []byte, _ error) {
-	data = make([]byte, 2)
+func (o statePowerLanMessage) MarshalBinary() ([]byte, error) {
+	return o.Level.MarshalBinary()
+}
 
-	binary.LittleEndian.PutUint16(data, uint16(o.Level))
+func (o stateLabelLanMessage) MarshalBinary() ([]byte, error) {
+	return o.Label.MarshalBinary()
+}
+
+func (o stateVersionLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 12)
+
+	// Vendor.
+	binary.LittleEndian.PutUint32(data[:4], o.Vendor)
+
+	// Product.
+	binary.LittleEndian.PutUint32(data[4:8], o.Product)
+
+	// Version.
+	binary.LittleEndian.PutUint32(data[8:], o.Version)
 
 	return
+}
+
+func (o stateInfoLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 24)
+
+	// Time.
+	binary.LittleEndian.PutUint64(data[:8], uint64(o.Time))
+
+	// Uptime.
+	binary.LittleEndian.PutUint64(data[8:16], o.Uptime)
+
+	// Downtime.
+	binary.LittleEndian.PutUint64(data[16:24], o.Downtime)
+
+	return
+}
+
+func (o stateLocationLanMessage) MarshalBinary() (data []byte, err error) {
+	data = make([]byte, 56)
+
+	// Location.
+	copy(data[:16], o.Location[:])
+
+	// Label.
+	b, err := o.Label.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[16:48], b)
+
+	// Updated at.
+	b, err = o.UpdatedAt.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[48:], b)
+
+	return
+}
+
+func (o stateGroupLanMessage) MarshalBinary() (data []byte, err error) {
+	data = make([]byte, 56)
+
+	// Location.
+	copy(data[:16], o.Group[:])
+
+	// Label.
+	b, err := o.Label.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[16:48], b)
+
+	// Updated at.
+	b, err = o.UpdatedAt.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[48:], b)
+
+	return
+}
+
+func (o echoResponseLanMessage) MarshalBinary() (data []byte, _ error) {
+	data = make([]byte, 64)
+
+	copy(data, o.Payload[:])
+
+	return
+}
+
+func (o lightStateLanMessage) MarshalBinary() (data []byte, err error) {
+	data = make([]byte, 44)
+
+	// Color.
+	b, err := o.Color.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[:8], b)
+
+	// Power.
+	b, err = o.Power.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[10:12], b)
+
+	// Label.
+	b, err = o.Label.MarshalBinary()
+	if err != nil {
+		return
+	}
+	copy(data[12:], b)
+
+	return
+}
+
+func (o lightStatePowerLanMessage) MarshalBinary() ([]byte, error) {
+	return o.Level.MarshalBinary()
 }
