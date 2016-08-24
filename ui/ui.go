@@ -89,7 +89,7 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	)
 
 	// Initialize saturation and Kelvin.
-	kCurrent = 2500
+	kCurrent = 3500
 	kStart = kCurrent
 	kEnd = kCurrent
 
@@ -205,15 +205,75 @@ func ShowWindow(label, group string, stopCh <-chan interface{}, actionCh <-chan 
 	return nil
 }
 
-// Use Kelvin.
 func setColor(h, s, b, k uint16) {
 	red, green, blue := hslToRgb(h, s, b)
+	kRed, kGreen, kBlue := kToRgb(float32(k))
 
-	gl.ClearColor(red, green, blue, 1)
+	gl.ClearColor(red*kRed, green*kGreen, blue*kBlue, 1)
 }
 
 func lerp(durationStart, duration, now int64, vStart uint16, vChange int32) uint16 {
 	return uint16(float32(now-durationStart)/float32(duration)*float32(vChange)+float32(vStart))
+}
+
+// Credit to http://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/.
+func kToRgb(k float32) (r, g, b float32) {
+	k /= 100
+
+	// Red.
+	if k <= 66 {
+		r = 255
+	} else {
+		r = k-60
+		r = 329.698727446*float32(math.Pow(float64(r), -0.1332047592))
+
+		if r < 0 {
+			r = 0
+		} else if r > 255 {
+			r = 255
+		}
+	}
+
+	// Green.
+	if k <= 66 {
+		g = k
+		g = 99.4708025861*float32(math.Log(float64(g)))-161.1195681661
+
+		if g < 0 {
+			g = 0
+		} else if g > 255 {
+			g = 255
+		}
+	} else {
+		g = k-60
+		g = 288.1221695283*float32(math.Pow(float64(g), -0.0755148492))
+
+		if g < 0 {
+			g = 0
+		} else if g > 255 {
+			g = 255
+		}
+	}
+
+	// Blue.
+	if k >= 66 {
+		b = 255
+	} else {
+		if k <= 19 {
+			b = 0
+		} else {
+			b = k-10
+			b = 138.5177312231*float32(math.Log(float64(b)))-305.0447927307
+
+			if b < 0 {
+				b = 0
+			} else if b > 255 {
+				b = 255
+			}
+		}
+	}
+
+	return r/255, g/255, b/255
 }
 
 func hslToRgb(hI, sI, lI uint16) (r, g, b float32) {
