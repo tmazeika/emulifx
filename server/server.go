@@ -2,7 +2,7 @@ package server
 
 import (
 	"net"
-	"github.com/bionicrm/controlifx"
+	"github.com/bionicrm/implifx"
 	"log"
 	"encoding"
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"github.com/bionicrm/emulifx/ui"
 	"math/rand"
 	"time"
+	"github.com/bionicrm/controlifx"
 )
 
 type (
@@ -45,20 +46,15 @@ func Start(label, group string, white bool) error {
 		winStopCh <- 0
 	}()
 
-	laddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	conn, err := implifx.ListenOnPort("127.0.0.1", 0)
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 
-	l, err := net.ListenUDP("udp", laddr)
-	if err != nil {
-		return err
-	}
-	defer l.Close()
+	fmt.Println("listening at", conn.LocalAddr().String())
 
-	fmt.Println("listening at", l.LocalAddr().String())
-
-	_, portStr, err := net.SplitHostPort(l.LocalAddr().String())
+	_, portStr, err := net.SplitHostPort(conn.LocalAddr().String())
 	if err != nil {
 		return err
 	}
@@ -87,14 +83,13 @@ func Start(label, group string, white bool) error {
 		}
 
 		windowClosed = true
-		l.Close()
+		conn.Close()
 	}()
 
 	target := uint64(rand.Int63())%0xffffffffffff
 
 	for {
-		b := make([]byte, controlifx.LanHeaderSize+64)
-		n, raddr, err := l.ReadFromUDP(b)
+		n, recMsg, raddr, err := conn.Receive()
 		if err != nil {
 			if windowClosed {
 				return nil
@@ -107,12 +102,6 @@ func Start(label, group string, white bool) error {
 		}
 
 		bulb.rx += uint32(n)
-		b = b[:n]
-
-		recMsg := receivableLanMessage{}
-		if err := recMsg.UnmarshalBinary(b); err != nil {
-			continue
-		}
 
 		if err := handle(recMsg, func(alwaysRes bool, t uint16, payload encoding.BinaryMarshaler) error {
 			msg := controlifx.SendableLanMessage{
@@ -130,7 +119,6 @@ func Start(label, group string, white bool) error {
 					},
 				},
 			}
-
 			getPayloadSize := func() (int, error) {
 				b, err := payload.MarshalBinary()
 				if err != nil {
@@ -140,6 +128,7 @@ func Start(label, group string, white bool) error {
 				return len(b), nil
 			}
 			var tx int
+			var b []byte
 
 			if alwaysRes || recMsg.Header.FrameAddress.ResRequired {
 				msg.Payload = payload
@@ -150,14 +139,14 @@ func Start(label, group string, white bool) error {
 				}
 				msg.Header.Frame.Size += uint16(payloadSize)
 
-				b, err := msg.MarshalBinary()
+				b, err = msg.MarshalBinary()
 				if err != nil {
 					return err
 				}
 
 				tx += len(b)
 
-				if _, err := l.WriteTo(b, raddr); err != nil {
+				if err := conn.Send(raddr, b); err != nil {
 					return err
 				}
 			}
@@ -165,14 +154,14 @@ func Start(label, group string, white bool) error {
 			if recMsg.Header.FrameAddress.AckRequired {
 				msg.Header.ProtocolHeader.Type = controlifx.AcknowledgementType
 
-				b, err := msg.MarshalBinary()
+				b, err = msg.MarshalBinary()
 				if err != nil {
 					return err
 				}
 
 				tx += len(b)
 
-				if _, err := l.WriteTo(b, raddr); err != nil {
+				if err := conn.Send(raddr, b); err != nil {
 					return err
 				}
 			}
@@ -186,7 +175,7 @@ func Start(label, group string, white bool) error {
 	}
 }
 
-func handle(msg receivableLanMessage, writer writer) error {
+func handle(msg implifx.ReceivableLanMessage, writer writer) error {
 	switch msg.Header.ProtocolHeader.Type {
 	case controlifx.GetServiceType:
 		return getService(writer)
@@ -230,27 +219,27 @@ func handle(msg receivableLanMessage, writer writer) error {
 }
 
 func getService(writer writer) error {
-	return writer(true, controlifx.StateServiceType, &stateServiceLanMessage{
-		Service:1,
+	return writer(true, controlifx.StateServiceType, &implifx.StateServiceLanMessage{
+		Service:controlifx.UdpService,
 		Port:bulb.port,
 	})
 }
 
 func getHostInfo(writer writer) error {
-	return writer(true, controlifx.StateHostInfoType, &stateHostInfoLanMessage{})
+	return writer(true, controlifx.StateHostInfoType, &implifx.StateHostInfoLanMessage{})
 }
 
 func getHostFirmware(writer writer) error {
-	return writer(true, controlifx.StateHostFirmwareType, &stateHostFirmwareLanMessage{
-		Build:1300233600000000000,
-		Version:1,
+	return writer(true, controlifx.StateHostFirmwareType, &implifx.StateHostFirmwareLanMessage{
+		Build:1467178139000000000,
+		Version:1968197120,
 	})
 }
 
 func getWifiInfo(writer writer) error {
-	const Signal = 7.943287e-6
+	const Signal = 5.0118706e-6
 
-	return writer(true, controlifx.StateWifiInfoType, &stateWifiInfoLanMessage{
+	return writer(true, controlifx.StateWifiInfoType, &implifx.StateWifiInfoLanMessage{
 		Signal:Signal,
 		Tx:bulb.tx,
 		Rx:bulb.rx,
@@ -258,9 +247,9 @@ func getWifiInfo(writer writer) error {
 }
 
 func getWifiFirmware(writer writer) error {
-	return writer(true, controlifx.StateWifiFirmwareType, &stateWifiFirmwareLanMessage{
-		Build:1300233600000000000,
-		Version:1,
+	return writer(true, controlifx.StateWifiFirmwareType, &implifx.StateWifiFirmwareLanMessage{
+		Build:1456093684000000000,
+		Version:0,
 	})
 }
 
@@ -270,13 +259,13 @@ func getPower(writer writer) error {
 		level = 0xffff
 	}
 
-	return writer(true, controlifx.StatePowerType, &statePowerLanMessage{
+	return writer(true, controlifx.StatePowerType, &implifx.StatePowerLanMessage{
 		Level:controlifx.PowerLevel(level),
 	})
 }
 
-func setPower(msg receivableLanMessage, writer writer) error {
-	on := msg.Payload.(*setPowerLanMessage).Level.On()
+func setPower(msg implifx.ReceivableLanMessage, writer writer) error {
+	on := msg.Payload.(*implifx.SetPowerLanMessage).Level.On()
 
 	winActionCh <- ui.PowerAction{
 		On:on,
@@ -289,39 +278,49 @@ func setPower(msg receivableLanMessage, writer writer) error {
 
 	bulb.powerLevel = controlifx.PowerLevel(level)
 
-	return writer(false, controlifx.StatePowerType, &statePowerLanMessage{
+	return writer(false, controlifx.StatePowerType, &implifx.StatePowerLanMessage{
 		Level:controlifx.PowerLevel(level),
 	})
 }
 
 func getLabel(writer writer) error {
-	return writer(true, controlifx.StateLabelType, &stateLabelLanMessage{
+	return writer(true, controlifx.StateLabelType, &implifx.StateLabelLanMessage{
 		Label:controlifx.Label(bulb.label),
 	})
 }
 
-func setLabel(msg receivableLanMessage, writer writer) error {
-	bulb.label = msg.Payload.(*setLabelLanMessage).Label
+func setLabel(msg implifx.ReceivableLanMessage, writer writer) error {
+	bulb.label = msg.Payload.(*implifx.SetLabelLanMessage).Label
 
 	winActionCh <- ui.LabelAction(bulb.label)
 
-	return writer(false, controlifx.StateLabelType, &stateLabelLanMessage{
+	return writer(false, controlifx.StateLabelType, &implifx.StateLabelLanMessage{
 		Label:controlifx.Label(bulb.label),
 	})
 }
 
 func getVersion(writer writer) error {
-	return writer(true, controlifx.StateVersionType, &stateVersionLanMessage{
-		Vendor:0,
-		Product:1,
-		Version:2,
+	var vendor, product uint32
+
+	if bulb.white {
+		vendor = controlifx.White800HighVVendorId
+		product = controlifx.White800HighVProductId
+	} else {
+		vendor = controlifx.Color1000VendorId
+		product = controlifx.Color1000ProductId
+	}
+
+	return writer(true, controlifx.StateVersionType, &implifx.StateVersionLanMessage{
+		Vendor:vendor,
+		Product:product,
+		Version:0,
 	})
 }
 
 func getInfo(writer writer) error {
 	now := time.Now()
 
-	return writer(true, controlifx.StateInfoType, &stateInfoLanMessage{
+	return writer(true, controlifx.StateInfoType, &implifx.StateInfoLanMessage{
 		Time:controlifx.Time(now.UnixNano()),
 		Uptime:uint64(now.Sub(bulb.poweredOnAt).Nanoseconds()),
 		Downtime:0,
@@ -329,7 +328,8 @@ func getInfo(writer writer) error {
 }
 
 func getLocation(writer writer) error {
-	return writer(true, controlifx.StateLocationType, &stateLocationLanMessage{
+	return writer(true, controlifx.StateLocationType, &implifx.StateLocationLanMessage{
+		// TODO: find documentation for location
 		Location:[16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15},
 		Label:controlifx.Label(bulb.group),
 		UpdatedAt:controlifx.Time(bulb.groupUpdatedAt.UnixNano()),
@@ -337,29 +337,30 @@ func getLocation(writer writer) error {
 }
 
 func getGroup(writer writer) error {
-	return writer(true, controlifx.StateGroupType, &stateGroupLanMessage{
+	return writer(true, controlifx.StateGroupType, &implifx.StateGroupLanMessage{
+		// TODO: find documentation for group
 		Group:[16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
 		Label:controlifx.Label(bulb.group),
 		UpdatedAt:controlifx.Time(bulb.groupUpdatedAt.UnixNano()),
 	})
 }
 
-func echoRequest(msg receivableLanMessage, writer writer) error {
-	return writer(true, controlifx.EchoResponseType, &echoResponseLanMessage{
-		Payload:msg.Payload.(*echoRequestLanMessage).Payload,
+func echoRequest(msg implifx.ReceivableLanMessage, writer writer) error {
+	return writer(true, controlifx.EchoResponseType, &implifx.EchoResponseLanMessage{
+		Payload:msg.Payload.(*implifx.EchoRequestLanMessage).Payload,
 	})
 }
 
 func lightGet(writer writer) error {
-	return writer(true, controlifx.LightStateType, &lightStateLanMessage{
+	return writer(true, controlifx.LightStateType, &implifx.LightStateLanMessage{
 		Color:bulb.color,
 		Power:bulb.powerLevel,
 		Label:bulb.label,
 	})
 }
 
-func lightSetColor(msg receivableLanMessage, writer writer) error {
-	payload := msg.Payload.(*lightSetColorLanMessage)
+func lightSetColor(msg implifx.ReceivableLanMessage, writer writer) error {
+	payload := msg.Payload.(*implifx.LightSetColorLanMessage)
 	bulb.color = payload.Color
 
 	winActionCh <- ui.ColorAction{
@@ -367,7 +368,7 @@ func lightSetColor(msg receivableLanMessage, writer writer) error {
 		Duration:payload.Duration,
 	}
 
-	return writer(false, controlifx.LightStateType, &lightStateLanMessage{
+	return writer(false, controlifx.LightStateType, &implifx.LightStateLanMessage{
 		Color:bulb.color,
 		Power:bulb.powerLevel,
 		Label:bulb.label,
@@ -375,13 +376,13 @@ func lightSetColor(msg receivableLanMessage, writer writer) error {
 }
 
 func lightGetPower(writer writer) error {
-	return writer(true, controlifx.LightStatePowerType, &lightStatePowerLanMessage{
+	return writer(true, controlifx.LightStatePowerType, &implifx.LightStatePowerLanMessage{
 		Level:bulb.powerLevel,
 	})
 }
 
-func lightSetPower(msg receivableLanMessage, writer writer) error {
-	payload := msg.Payload.(*lightSetPowerLanMessage)
+func lightSetPower(msg implifx.ReceivableLanMessage, writer writer) error {
+	payload := msg.Payload.(*implifx.LightSetPowerLanMessage)
 
 	winActionCh <- ui.PowerAction{
 		On:payload.Level.On(),
@@ -395,7 +396,7 @@ func lightSetPower(msg receivableLanMessage, writer writer) error {
 
 	bulb.powerLevel = controlifx.PowerLevel(level)
 
-	return writer(false, controlifx.LightStatePowerType, &statePowerLanMessage{
+	return writer(false, controlifx.LightStatePowerType, &implifx.StatePowerLanMessage{
 		Level:controlifx.PowerLevel(level),
 	})
 }
