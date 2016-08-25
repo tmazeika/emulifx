@@ -6,7 +6,6 @@ import (
 	"log"
 	"encoding"
 	"fmt"
-	"strconv"
 	"github.com/bionicrm/emulifx/ui"
 	"math/rand"
 	"time"
@@ -15,23 +14,22 @@ import (
 
 type (
 	lifxbulb struct {
-		port  uint32
+		port  uint16
 		white bool
 
-		powerLevel controlifx.PowerLevel
-		color      controlifx.HSBK
+		poweredOn   bool
+		poweredOnAt time.Time
+		color       controlifx.HSBK
 
 		tx uint32
 		rx uint32
 
-		label          controlifx.Label
+		label          string
 		group          string
 		groupUpdatedAt time.Time
-
-		poweredOnAt time.Time
 	}
 
-	writer func(alwaysRes bool, t uint16, msg encoding.BinaryMarshaler) error
+	writer func(always bool, t uint16, msg encoding.BinaryMarshaler) error
 )
 
 var (
@@ -46,33 +44,26 @@ func Start(label, group string, white bool) error {
 		winStopCh <- 0
 	}()
 
-	conn, err := implifx.ListenOnPort("127.0.0.1", 0)
+	conn, err := implifx.ListenOnOtherPort("127.0.0.1", "0")
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	fmt.Println("listening at", conn.LocalAddr().String())
+	// Mock MAC.
+	conn.Mac = uint64(rand.Int63())%0xffffffffffff
 
-	_, portStr, err := net.SplitHostPort(conn.LocalAddr().String())
-	if err != nil {
-		return err
-	}
-
-	portI, err := strconv.Atoi(portStr)
-	if err != nil {
-		return err
-	}
+	fmt.Println("Listening at", conn.LocalAddr().String())
 
 	// Configure bulb.
 	now := time.Now()
 	bulb = lifxbulb{
-		port:uint32(portI),
+		port:conn.Port(),
 		white:white,
-		label:controlifx.Label(label),
+		poweredOnAt:now,
+		label:label,
 		group:group,
 		groupUpdatedAt:now,
-		poweredOnAt:now,
 	}
 
 	var windowClosed bool
@@ -86,10 +77,8 @@ func Start(label, group string, white bool) error {
 		conn.Close()
 	}()
 
-	target := uint64(rand.Int63())%0xffffffffffff
-
 	for {
-		n, recMsg, raddr, err := conn.Receive()
+		n, raddr, recMsg, err := conn.Receive()
 		if err != nil {
 			if windowClosed {
 				return nil
@@ -97,82 +86,28 @@ func Start(label, group string, white bool) error {
 			if err.(net.Error).Temporary() {
 				continue
 			}
-
 			return err
 		}
 
 		bulb.rx += uint32(n)
 
-		if err := handle(recMsg, func(alwaysRes bool, t uint16, payload encoding.BinaryMarshaler) error {
-			msg := controlifx.SendableLanMessage{
-				Header:controlifx.LanHeader{
-					Frame:controlifx.LanHeaderFrame{
-						Size:controlifx.LanHeaderSize,
-						Source:recMsg.Header.Frame.Source,
-					},
-					FrameAddress:controlifx.LanHeaderFrameAddress{
-						Target:target,
-						Sequence:recMsg.Header.FrameAddress.Sequence,
-					},
-					ProtocolHeader:controlifx.LanHeaderProtocolHeader{
-						Type:t,
-					},
-				},
-			}
-			getPayloadSize := func() (int, error) {
-				b, err := payload.MarshalBinary()
-				if err != nil {
-					return 0, err
-				}
-
-				return len(b), nil
-			}
-			var tx int
-			var b []byte
-
-			if alwaysRes || recMsg.Header.FrameAddress.ResRequired {
-				msg.Payload = payload
-
-				payloadSize, err := getPayloadSize()
-				if err != nil {
-					return err
-				}
-				msg.Header.Frame.Size += uint16(payloadSize)
-
-				b, err = msg.MarshalBinary()
-				if err != nil {
-					return err
-				}
-
-				tx += len(b)
-
-				if err := conn.Send(raddr, b); err != nil {
-					return err
-				}
-			}
-
-			if recMsg.Header.FrameAddress.AckRequired {
-				msg.Header.ProtocolHeader.Type = controlifx.AcknowledgementType
-
-				b, err = msg.MarshalBinary()
-				if err != nil {
-					return err
-				}
-
-				tx += len(b)
-
-				if err := conn.Send(raddr, b); err != nil {
-					return err
-				}
-			}
-
-			bulb.tx += uint32(len(b))
+		if err := handle(recMsg, func(always bool, t uint16, payload encoding.BinaryMarshaler) error {
+			tx, err := conn.Respond(always, raddr, recMsg, t, payload)
+			bulb.tx += uint32(tx)
 
 			return err
 		}); err != nil {
 			log.Println(err)
 		}
 	}
+}
+
+func (o lifxbulb) PowerLevel() uint16 {
+	if o.poweredOn {
+		return 0xffff
+	}
+
+	return 0
 }
 
 func handle(msg implifx.ReceivableLanMessage, writer writer) error {
@@ -221,7 +156,7 @@ func handle(msg implifx.ReceivableLanMessage, writer writer) error {
 func getService(writer writer) error {
 	return writer(true, controlifx.StateServiceType, &implifx.StateServiceLanMessage{
 		Service:controlifx.UdpService,
-		Port:bulb.port,
+		Port:uint32(bulb.port),
 	})
 }
 
@@ -237,10 +172,8 @@ func getHostFirmware(writer writer) error {
 }
 
 func getWifiInfo(writer writer) error {
-	const Signal = 5.0118706e-6
-
 	return writer(true, controlifx.StateWifiInfoType, &implifx.StateWifiInfoLanMessage{
-		Signal:Signal,
+		Signal:5.0118706e-6,
 		Tx:bulb.tx,
 		Rx:bulb.rx,
 	})
@@ -254,38 +187,26 @@ func getWifiFirmware(writer writer) error {
 }
 
 func getPower(writer writer) error {
-	var level uint16
-	if bulb.powerLevel.On() {
-		level = 0xffff
-	}
-
 	return writer(true, controlifx.StatePowerType, &implifx.StatePowerLanMessage{
-		Level:controlifx.PowerLevel(level),
+		Level:bulb.PowerLevel(),
 	})
 }
 
 func setPower(msg implifx.ReceivableLanMessage, writer writer) error {
-	on := msg.Payload.(*implifx.SetPowerLanMessage).Level.On()
+	bulb.poweredOn = msg.Payload.(*implifx.SetPowerLanMessage).Level == 0xffff
 
 	winActionCh <- ui.PowerAction{
-		On:on,
+		On:bulb.poweredOn,
 	}
-
-	var level uint16
-	if on {
-		level = 0xffff
-	}
-
-	bulb.powerLevel = controlifx.PowerLevel(level)
 
 	return writer(false, controlifx.StatePowerType, &implifx.StatePowerLanMessage{
-		Level:controlifx.PowerLevel(level),
+		Level:bulb.PowerLevel(),
 	})
 }
 
 func getLabel(writer writer) error {
 	return writer(true, controlifx.StateLabelType, &implifx.StateLabelLanMessage{
-		Label:controlifx.Label(bulb.label),
+		Label:bulb.label,
 	})
 }
 
@@ -295,7 +216,7 @@ func setLabel(msg implifx.ReceivableLanMessage, writer writer) error {
 	winActionCh <- ui.LabelAction(bulb.label)
 
 	return writer(false, controlifx.StateLabelType, &implifx.StateLabelLanMessage{
-		Label:controlifx.Label(bulb.label),
+		Label:bulb.label,
 	})
 }
 
@@ -321,7 +242,7 @@ func getInfo(writer writer) error {
 	now := time.Now()
 
 	return writer(true, controlifx.StateInfoType, &implifx.StateInfoLanMessage{
-		Time:controlifx.Time(now.UnixNano()),
+		Time:uint64(now.UnixNano()),
 		Uptime:uint64(now.Sub(bulb.poweredOnAt).Nanoseconds()),
 		Downtime:0,
 	})
@@ -331,8 +252,8 @@ func getLocation(writer writer) error {
 	return writer(true, controlifx.StateLocationType, &implifx.StateLocationLanMessage{
 		// TODO: find documentation for location
 		Location:[16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15},
-		Label:controlifx.Label(bulb.group),
-		UpdatedAt:controlifx.Time(bulb.groupUpdatedAt.UnixNano()),
+		Label:bulb.group,
+		UpdatedAt:uint64(bulb.groupUpdatedAt.UnixNano()),
 	})
 }
 
@@ -340,8 +261,8 @@ func getGroup(writer writer) error {
 	return writer(true, controlifx.StateGroupType, &implifx.StateGroupLanMessage{
 		// TODO: find documentation for group
 		Group:[16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-		Label:controlifx.Label(bulb.group),
-		UpdatedAt:controlifx.Time(bulb.groupUpdatedAt.UnixNano()),
+		Label:bulb.group,
+		UpdatedAt:uint64(bulb.groupUpdatedAt.UnixNano()),
 	})
 }
 
@@ -354,7 +275,7 @@ func echoRequest(msg implifx.ReceivableLanMessage, writer writer) error {
 func lightGet(writer writer) error {
 	return writer(true, controlifx.LightStateType, &implifx.LightStateLanMessage{
 		Color:bulb.color,
-		Power:bulb.powerLevel,
+		Power:bulb.PowerLevel(),
 		Label:bulb.label,
 	})
 }
@@ -370,33 +291,27 @@ func lightSetColor(msg implifx.ReceivableLanMessage, writer writer) error {
 
 	return writer(false, controlifx.LightStateType, &implifx.LightStateLanMessage{
 		Color:bulb.color,
-		Power:bulb.powerLevel,
+		Power:bulb.PowerLevel(),
 		Label:bulb.label,
 	})
 }
 
 func lightGetPower(writer writer) error {
 	return writer(true, controlifx.LightStatePowerType, &implifx.LightStatePowerLanMessage{
-		Level:bulb.powerLevel,
+		Level:bulb.PowerLevel(),
 	})
 }
 
 func lightSetPower(msg implifx.ReceivableLanMessage, writer writer) error {
 	payload := msg.Payload.(*implifx.LightSetPowerLanMessage)
+	bulb.poweredOn = payload.Level == 0xffff
 
 	winActionCh <- ui.PowerAction{
-		On:payload.Level.On(),
+		On:bulb.poweredOn,
 		Duration:payload.Duration,
 	}
 
-	var level uint16
-	if payload.Level.On() {
-		level = 0xffff
-	}
-
-	bulb.powerLevel = controlifx.PowerLevel(level)
-
 	return writer(false, controlifx.LightStatePowerType, &implifx.StatePowerLanMessage{
-		Level:controlifx.PowerLevel(level),
+		Level:payload.Level,
 	})
 }

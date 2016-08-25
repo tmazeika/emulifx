@@ -34,7 +34,7 @@ type (
 		Duration uint32
 	}
 
-	LabelAction controlifx.Label
+	LabelAction string
 )
 
 func init() {
@@ -51,7 +51,7 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 	glfw.WindowHint(glfw.ContextVersionMajor, 2)
 	glfw.WindowHint(glfw.ContextVersionMinor, 1)
 
-	win, err := glfw.CreateWindow(Width, Height, Title +" (off)", nil, nil)
+	win, err := glfw.CreateWindow(Width, Height, Title, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -70,17 +70,29 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 
 	var (
 		colorMutex sync.Mutex
-		lastBrightness uint16 = 0xffff
-		power bool
-		hCurrent, sCurrent, bCurrent, kCurrent, hStart, sStart, bStart, kStart, hEnd, sEnd, bEnd, kEnd uint16
+
+		// Power.
+		bLast int32 = 0xffff
+		poweredOn bool
+
+		// Current.
+		hCurrent, sCurrent, bCurrent, kCurrent,
+		// Start.
+		hStart, sStart, bStart, kStart,
+		// End.
+		hEnd, sEnd, bEnd, kEnd,
+		// Change.
 		hChange, sChange, bChange, kChange int32
-		farHChange, hChangeLeft bool
-		durationStart, duration, bDuration int64
+
+		hChangeToLeft bool
+
+		// Duration.
+		durationStart, duration, bDurationStart, bDuration int64
 
 		updateTitle = func() {
-			str := Title +": "+label+"@"+group+" ("
+			str := Title+": "+label+"@"+group+" ("
 
-			if power {
+			if poweredOn {
 				str += "on)"
 			} else {
 				str += "off)"
@@ -90,7 +102,7 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 		}
 	)
 
-	// Initialize saturation and Kelvin.
+	// Initialize Kelvin.
 	kCurrent = 3500
 	kStart = kCurrent
 	kEnd = kCurrent
@@ -104,23 +116,23 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 				switch action.(type) {
 				case PowerAction:
 					powerAction := action.(PowerAction)
-					power = powerAction.On
+					poweredOn = powerAction.On
 					now := time.Now()
 
 					colorMutex.Lock()
-					durationStart = now.UnixNano()
-					bDuration = int64(math.Max(FastestBrightnessChangeDuration, float64(powerAction.Duration)*1e6))
+					bDurationStart = now.UnixNano()
+					bDuration = int64(math.Max(FastestBrightnessChangeDuration, float64(durationToNano(powerAction.Duration))))
 
-					if power {
+					if poweredOn {
 						bStart = bCurrent
-						bEnd = lastBrightness
+						bEnd = bLast
 					} else {
-						lastBrightness = bCurrent
+						bLast = bCurrent
 						bStart = bCurrent
 						bEnd = 0
 					}
 
-					bChange = int32(bEnd)-int32(bStart)
+					bChange = bEnd-bStart
 					colorMutex.Unlock()
 
 					updateTitle()
@@ -134,32 +146,27 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 					sStart = sCurrent
 					bStart = bCurrent
 					kStart = kCurrent
-					hEnd = color.Hue
-					sEnd = color.Saturation
-					bEnd = color.Brightness
-					kEnd = color.Kelvin
-					sChange = int32(sEnd)-int32(sStart)
-					bChange = int32(bEnd)-int32(bStart)
-					kChange = int32(kEnd)-int32(kStart)
+					hEnd = int32(color.Hue)
+					sEnd = int32(color.Saturation)
+					bEnd = int32(color.Brightness)
+					kEnd = int32(color.Kelvin)
+					hChange = hEnd-hStart
+					sChange = sEnd-sStart
+					bChange = bEnd-bStart
+					kChange = kEnd-kStart
 
-					// The hue's change takes the shortest distance.
-					if farHChange = difference(hStart, hEnd) > 0xffff/2; farHChange {
-						start := int32(hStart)
-						end := int32(hEnd)
-
-						if hChangeLeft = end-start > 0; hChangeLeft {
-							// Moving right, switch to left.
-							hChange = -0xffff-start+end
+					// Hue change takes the shortest distance.
+					if abs(hChange) > 0xffff/2 {
+						if hChangeToLeft = hChange > 0; hChangeToLeft {
+							hChange -= 0xffff
 						} else {
-							// Moving left, switch to right.
-							hChange = 0xffff-start+end
+							hChange += 0xffff
 						}
-					} else {
-						hChange = int32(hEnd)-int32(hStart)
 					}
 
 					durationStart = now.UnixNano()
-					duration = int64(colorAction.Duration)*1e6
+					bDurationStart = durationStart
+					duration = durationToNano(colorAction.Duration)
 					bDuration = duration
 
 					colorMutex.Unlock()
@@ -174,6 +181,7 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 		}
 	}()
 
+	// Add LIFX logo.
 	tex, err := newTexture("ui/lifx.png")
 	if err != nil {
 		return err
@@ -187,43 +195,39 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 		now := time.Now().UnixNano()
 
 		colorMutex.Lock()
+		// Hue, saturation, and Kelvin linear interpolation.
 		if now < durationStart+duration {
-			if farHChange {
-				hCurrentI := lerp(durationStart, duration, now, hStart, hChange)
+			hCurrent = lerp(durationStart, duration, now, hStart, hChange)
+			sCurrent = lerp(durationStart, duration, now, sStart, sChange)
+			kCurrent = lerp(durationStart, duration, now, kStart, kChange)
 
-				if hChangeLeft {
-					hCurrent = uint16(0xffff+hCurrentI%0xffff)
-				} else {
-					hCurrent = uint16(hCurrentI)
-				}
-			} else {
-				hCurrent = uint16(lerp(durationStart, duration, now, hStart, hChange))
+			if hChangeToLeft {
+				hCurrent += 0xffff
 			}
-
-			sCurrent = uint16(lerp(durationStart, duration, now, sStart, sChange))
-			kCurrent = uint16(lerp(durationStart, duration, now, kStart, kChange))
 		} else {
 			hCurrent = hEnd
 			sCurrent = sEnd
 			kCurrent = kEnd
 		}
 
-		if now < durationStart+bDuration {
-			bCurrent = uint16(lerp(durationStart, bDuration, now, bStart, bChange))
+		// Brightness linear interpolation.
+		if now < bDurationStart+bDuration {
+			bCurrent = lerp(bDurationStart, bDuration, now, bStart, bChange)
 		} else {
 			bCurrent = bEnd
 		}
 
 		if white {
-			setColor(0, 0, bCurrent, kCurrent)
+			// White bulbs have no hue or saturation.
+			setColor(0, 0, float32(bCurrent)/0xffff, float32(kCurrent))
 		} else {
-			setColor(hCurrent, sCurrent, bCurrent, kCurrent)
+			setColor(float32(hCurrent)/0xffff, float32(sCurrent)/0xffff, float32(bCurrent)/0xffff, float32(kCurrent))
 		}
 
 		colorMutex.Unlock()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
-		// Draw image.
+		// Draw LIFX logo.
 		gl.BindTexture(gl.TEXTURE_2D, tex)
 		gl.Begin(gl.QUADS)
 		gl.Normal3f(0, 0, 1)
@@ -244,24 +248,22 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 	return nil
 }
 
-func difference(a, b uint16) int32 {
-	diff := int32(a)-int32(b)
-
-	if diff < 0 {
-		return -diff
-	} else {
-		return diff
+func abs(a int32) int32 {
+	if a < 0 {
+		return -a
 	}
+
+	return a
 }
 
-func setColor(h, s, b, k uint16) {
+func setColor(h, s, b, k float32) {
 	red, green, blue := hslToRgb(h, s, b)
-	kRed, kGreen, kBlue := kToRgb(float32(k))
+	kRed, kGreen, kBlue := kToRgb(k)
 
 	gl.ClearColor(red*kRed, green*kGreen, blue*kBlue, 1)
 }
 
-func lerp(durationStart, duration, now int64, vStart uint16, vChange int32) int32 {
+func lerp(durationStart, duration, now int64, vStart, vChange int32) int32 {
 	return int32(float32(now-durationStart)/float32(duration)*float32(vChange)+float32(vStart))
 }
 
@@ -272,64 +274,40 @@ func kToRgb(k float32) (r, g, b float32) {
 	// Red.
 	if k <= 66 {
 		r = 255
-	} else {
-		r = k-60
-		r = 329.698727446*float32(math.Pow(float64(r), -0.1332047592))
-
-		if r < 0 {
-			r = 0
-		} else if r > 255 {
-			r = 255
-		}
+	} else if r = 329.698727446*float32(math.Pow(float64(k-60), -0.1332047592)); r < 0 {
+		r = 0
+	} else if r > 255 {
+		r = 255
 	}
 
 	// Green.
 	if k <= 66 {
-		g = k
-		g = 99.4708025861*float32(math.Log(float64(g)))-161.1195681661
-
-		if g < 0 {
+		if g = 99.4708025861*float32(math.Log(float64(k)))-161.1195681661; g < 0 {
 			g = 0
 		} else if g > 255 {
 			g = 255
 		}
-	} else {
-		g = k-60
-		g = 288.1221695283*float32(math.Pow(float64(g), -0.0755148492))
-
-		if g < 0 {
-			g = 0
-		} else if g > 255 {
-			g = 255
-		}
+	} else if g = 288.1221695283*float32(math.Pow(float64(k-60), -0.0755148492)); g < 0 {
+		g = 0
+	} else if g > 255 {
+		g = 255
 	}
 
 	// Blue.
 	if k >= 66 {
 		b = 255
-	} else {
-		if k <= 19 {
-			b = 0
-		} else {
-			b = k-10
-			b = 138.5177312231*float32(math.Log(float64(b)))-305.0447927307
-
-			if b < 0 {
-				b = 0
-			} else if b > 255 {
-				b = 255
-			}
-		}
+	} else if k <= 19 {
+		b = 0
+	} else if b = 138.5177312231*float32(math.Log(float64(k-10)))-305.0447927307; b < 0 {
+		b = 0
+	} else if b > 255 {
+		b = 255
 	}
 
 	return r/255, g/255, b/255
 }
 
-func hslToRgb(hI, sI, lI uint16) (r, g, b float32) {
-	h := float32(hI)/0xffff
-	s := float32(sI)/0xffff
-	l := float32(lI)/0xffff
-
+func hslToRgb(h, s, l float32) (r, g, b float32) {
 	if s == 0 {
 		r = l
 		g = l
@@ -367,6 +345,10 @@ func hslToRgb(hI, sI, lI uint16) (r, g, b float32) {
 	}
 
 	return
+}
+
+func durationToNano(d uint32) int64 {
+	return int64(d)*1e6
 }
 
 func newTexture(file string) (uint32, error) {
