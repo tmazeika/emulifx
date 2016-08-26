@@ -2,11 +2,10 @@ package ui
 
 import (
 	"runtime"
-	"github.com/go-gl/glfw/v3.0/glfw"
+	"github.com/go-gl/glfw/v3.2/glfw"
 	"github.com/go-gl/gl/v2.1/gl"
 	"errors"
-	"github.com/bionicrm/controlifx"
-	_ "image/png"
+	"gopkg.in/golifx/controlifx.v1"
 	"image"
 	"image/draw"
 	"time"
@@ -42,8 +41,8 @@ func init() {
 }
 
 func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
-	if ok := glfw.Init(); !ok {
-		return errors.New("error initializing GLFW")
+	if err := glfw.Init(); err != nil {
+		return err
 	}
 	defer glfw.Terminate()
 

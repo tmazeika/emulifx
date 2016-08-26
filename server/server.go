@@ -2,14 +2,14 @@ package server
 
 import (
 	"net"
-	"github.com/bionicrm/implifx"
+	"gopkg.in/golifx/implifx.v1"
 	"log"
 	"encoding"
 	"fmt"
 	"github.com/bionicrm/emulifx/ui"
 	"math/rand"
 	"time"
-	"github.com/bionicrm/controlifx"
+	"gopkg.in/golifx/controlifx.v1"
 )
 
 type (
