@@ -41,7 +41,7 @@ func init() {
 	runtime.LockOSThread()
 }
 
-func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
+func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
 	if ok := glfw.Init(); !ok {
 		return errors.New("error initializing GLFW")
 	}
@@ -97,6 +97,8 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 			} else {
 				str += "off)"
 			}
+
+			str += " - "+laddr
 
 			win.SetTitle(str)
 		}
