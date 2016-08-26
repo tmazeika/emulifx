@@ -6,6 +6,7 @@ import (
 	"github.com/go-gl/gl/v2.1/gl"
 	"errors"
 	"gopkg.in/golifx/controlifx.v1"
+	_ "image/png"
 	"image"
 	"image/draw"
 	"time"
