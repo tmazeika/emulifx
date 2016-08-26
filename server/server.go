@@ -193,15 +193,16 @@ func getPower(writer writer) error {
 }
 
 func setPower(msg implifx.ReceivableLanMessage, writer writer) error {
+	responsePayload := &implifx.StatePowerLanMessage{
+		Level:bulb.PowerLevel(),
+	}
 	bulb.poweredOn = msg.Payload.(*implifx.SetPowerLanMessage).Level == 0xffff
 
 	winActionCh <- ui.PowerAction{
 		On:bulb.poweredOn,
 	}
 
-	return writer(false, controlifx.StatePowerType, &implifx.StatePowerLanMessage{
-		Level:bulb.PowerLevel(),
-	})
+	return writer(false, controlifx.StatePowerType, responsePayload)
 }
 
 func getLabel(writer writer) error {
@@ -221,21 +222,19 @@ func setLabel(msg implifx.ReceivableLanMessage, writer writer) error {
 }
 
 func getVersion(writer writer) error {
-	var vendor, product uint32
-
-	if bulb.white {
-		vendor = controlifx.White800HighVVendorId
-		product = controlifx.White800HighVProductId
-	} else {
-		vendor = controlifx.Color1000VendorId
-		product = controlifx.Color1000ProductId
+	responsePayload := &implifx.StateVersionLanMessage{
+		Version:0,
 	}
 
-	return writer(true, controlifx.StateVersionType, &implifx.StateVersionLanMessage{
-		Vendor:vendor,
-		Product:product,
-		Version:0,
-	})
+	if bulb.white {
+		responsePayload.Vendor = controlifx.White800HighVVendorId
+		responsePayload.Product = controlifx.White800HighVProductId
+	} else {
+		responsePayload.Vendor = controlifx.Color1000VendorId
+		responsePayload.Product = controlifx.Color1000ProductId
+	}
+
+	return writer(true, controlifx.StateVersionType, responsePayload)
 }
 
 func getInfo(writer writer) error {
@@ -281,6 +280,11 @@ func lightGet(writer writer) error {
 }
 
 func lightSetColor(msg implifx.ReceivableLanMessage, writer writer) error {
+	responsePayload := &implifx.LightStateLanMessage{
+		Color:bulb.color,
+		Power:bulb.PowerLevel(),
+		Label:bulb.label,
+	}
 	payload := msg.Payload.(*implifx.LightSetColorLanMessage)
 	bulb.color = payload.Color
 
@@ -289,11 +293,7 @@ func lightSetColor(msg implifx.ReceivableLanMessage, writer writer) error {
 		Duration:payload.Duration,
 	}
 
-	return writer(false, controlifx.LightStateType, &implifx.LightStateLanMessage{
-		Color:bulb.color,
-		Power:bulb.PowerLevel(),
-		Label:bulb.label,
-	})
+	return writer(false, controlifx.LightStateType, responsePayload)
 }
 
 func lightGetPower(writer writer) error {
@@ -303,6 +303,9 @@ func lightGetPower(writer writer) error {
 }
 
 func lightSetPower(msg implifx.ReceivableLanMessage, writer writer) error {
+	responsePayload := &implifx.StatePowerLanMessage{
+		Level:bulb.PowerLevel(),
+	}
 	payload := msg.Payload.(*implifx.LightSetPowerLanMessage)
 	bulb.poweredOn = payload.Level == 0xffff
 
@@ -311,7 +314,5 @@ func lightSetPower(msg implifx.ReceivableLanMessage, writer writer) error {
 		Duration:payload.Duration,
 	}
 
-	return writer(false, controlifx.LightStatePowerType, &implifx.StatePowerLanMessage{
-		Level:payload.Level,
-	})
+	return writer(false, controlifx.LightStatePowerType, responsePayload)
 }
