@@ -39,12 +39,17 @@ var (
 	winActionCh = make(chan interface{})
 )
 
-func Start(label, group string, white bool) error {
+func Start(addr, label, group string, white bool) error {
 	defer func() {
 		winStopCh <- 0
 	}()
 
-	conn, err := implifx.ListenOnOtherPort("127.0.0.1", "0")
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+
+	conn, err := implifx.ListenOnOtherPort(host, portStr)
 	if err != nil {
 		return err
 	}
@@ -58,9 +63,12 @@ func Start(label, group string, white bool) error {
 	// Configure bulb.
 	now := time.Now()
 	bulb = lifxbulb{
-		port:           conn.Port(),
-		white:          white,
-		poweredOnAt:    now,
+		port:        conn.Port(),
+		white:       white,
+		poweredOnAt: now,
+		color: controlifx.HSBK{
+			Kelvin: 3500,
+		},
 		label:          label,
 		group:          group,
 		groupUpdatedAt: now,
