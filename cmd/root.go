@@ -4,8 +4,8 @@ import "github.com/spf13/cobra"
 
 var (
 	RootCmd = &cobra.Command{
-		Use:"emulifx",
-		Short:"Emulate a LIFX bulb on the network",
+		Use:   "emulifx",
+		Short: "Emulate a LIFX bulb on the network",
 	}
 
 	// Flags.
