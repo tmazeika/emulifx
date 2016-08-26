@@ -7,12 +7,12 @@ import (
 	"errors"
 	"github.com/bionicrm/controlifx"
 	_ "image/png"
-	"os"
 	"image"
 	"image/draw"
 	"time"
 	"sync"
 	"math"
+	"bytes"
 )
 
 const (
@@ -182,7 +182,7 @@ func ShowWindow(white bool, label, group string, stopCh <-chan interface{}, acti
 	}()
 
 	// Add LIFX logo.
-	tex, err := newTexture("ui/lifx.png")
+	tex, err := newTexture("res/lifx.png")
 	if err != nil {
 		return err
 	}
@@ -352,12 +352,9 @@ func durationToNano(d uint32) int64 {
 }
 
 func newTexture(file string) (uint32, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return 0, err
-	}
+	dataReader := bytes.NewReader(MustAsset(file))
 
-	img, _, err := image.Decode(f)
+	img, _, err := image.Decode(dataReader)
 	if err != nil {
 		return 0, err
 	}
