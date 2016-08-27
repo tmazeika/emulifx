@@ -84,8 +84,6 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 		// Change.
 		hChange, sChange, bChange, kChange int32
 
-		hChangeToLeft bool
-
 		// Duration.
 		durationStart, duration, bDurationStart, bDuration int64
 
@@ -159,7 +157,7 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 
 					// Hue change takes the shortest distance.
 					if abs(hChange) > 0xffff/2 {
-						if hChangeToLeft = hChange > 0; hChangeToLeft {
+						if hChange > 0 {
 							hChange -= 0xffff
 						} else {
 							hChange += 0xffff
@@ -203,7 +201,7 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 			sCurrent = lerp(durationStart, duration, now, sStart, sChange)
 			kCurrent = lerp(durationStart, duration, now, kStart, kChange)
 
-			if hChangeToLeft {
+			if hChange < -hStart && hCurrent < 0 {
 				hCurrent += 0xffff
 			}
 		} else {
@@ -223,7 +221,7 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 			// White bulbs have no hue or saturation.
 			setColor(0, 0, float32(bCurrent)/0xffff, float32(kCurrent))
 		} else {
-			setColor(float32(hCurrent)/0xffff, float32(sCurrent)/0xffff, float32(bCurrent)/0xffff, float32(kCurrent))
+			setColor(float32(hCurrent)/0xffff, float32(sCurrent)/0xffff, float32(bCurrent)/0xffff/2, float32(kCurrent))
 		}
 
 		colorMutex.Unlock()
@@ -262,7 +260,7 @@ func setColor(h, s, b, k float32) {
 	red, green, blue := hslToRgb(h, s, b)
 	kRed, kGreen, kBlue := kToRgb(k)
 
-	gl.ClearColor(red*kRed, green*kGreen, blue*kBlue, 1)
+	gl.ClearColor(red*kRed*2, green*kGreen*2, blue*kBlue*2, 1)
 }
 
 func lerp(durationStart, duration, now int64, vStart, vChange int32) int32 {
