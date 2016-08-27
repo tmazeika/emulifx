@@ -155,7 +155,8 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 					bChange = bEnd - bStart
 					kChange = kEnd - kStart
 
-					// Hue change takes the shortest distance.
+					// Hue change takes the shortest
+					// distance.
 					if abs(hChange) > 0xffff/2 {
 						if hChange > 0 {
 							hChange -= 0xffff
@@ -200,10 +201,6 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 			hCurrent = lerp(durationStart, duration, now, hStart, hChange)
 			sCurrent = lerp(durationStart, duration, now, sStart, sChange)
 			kCurrent = lerp(durationStart, duration, now, kStart, kChange)
-
-			if hChange < -hStart && hCurrent < 0 {
-				hCurrent += 0xffff
-			}
 		} else {
 			hCurrent = hEnd
 			sCurrent = sEnd
