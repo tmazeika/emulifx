@@ -33,15 +33,13 @@ type (
 		Color    controlifx.HSBK
 		Duration uint32
 	}
-
-	LabelAction string
 )
 
 func init() {
 	runtime.LockOSThread()
 }
 
-func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
+func ShowWindow(hasColor bool, laddr string, stopCh <-chan interface{}, actionCh <-chan interface{}) error {
 	if err := glfw.Init(); err != nil {
 		return err
 	}
@@ -88,15 +86,13 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 		durationStart, duration, bDurationStart, bDuration int64
 
 		updateTitle = func() {
-			str := Title + ": " + label + "@" + group + " ("
+			str := Title + " - " + laddr + " ("
 
 			if poweredOn {
 				str += "on)"
 			} else {
 				str += "off)"
 			}
-
-			str += " - " + laddr
 
 			win.SetTitle(str)
 		}
@@ -171,10 +167,6 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 					bDuration = duration
 
 					colorMutex.Unlock()
-				case LabelAction:
-					label = string(action.(LabelAction))
-
-					updateTitle()
 				}
 			case <-stopCh:
 				win.SetShouldClose(true)
@@ -214,11 +206,11 @@ func ShowWindow(white bool, label, group, laddr string, stopCh <-chan interface{
 			bCurrent = bEnd
 		}
 
-		if white {
-			// White bulbs have no hue or saturation.
-			setColor(0, 0, float32(bCurrent)/0xffff, float32(kCurrent))
-		} else {
+		if hasColor {
 			setColor(float32(hCurrent)/0xffff, float32(sCurrent)/0xffff, float32(bCurrent)/0xffff/2, float32(kCurrent))
+		} else {
+			// Non-color bulbs have no hue or saturation.
+			setColor(0, 0, float32(bCurrent)/0xffff, float32(kCurrent))
 		}
 
 		colorMutex.Unlock()

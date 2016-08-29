@@ -11,7 +11,7 @@ var (
 		Use:   "color",
 		Short: "emulates the LIFX Color 1000 bulb",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := server.Start(addr, label, group, false); err != nil {
+			if err := server.Start(addr, true); err != nil {
 				log.Fatalln(err)
 			}
 		},
@@ -20,7 +20,7 @@ var (
 		Use:   "white",
 		Short: "emulates the LIFX White 800 bulb",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := server.Start(addr, label, group, true); err != nil {
+			if err := server.Start(addr, false); err != nil {
 				log.Fatalln(err)
 			}
 		},
