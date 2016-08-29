@@ -277,8 +277,8 @@ func getHostInfo(w writer) error {
 
 func getHostFirmware(w writer) error {
 	return w(true, controlifx.StateHostFirmwareType, &implifx.StateHostFirmwareLanMessage{
-		Build:   1467178139000000000,
-		Version: 1968197120,
+		Build:   uint64(bulb.hostFirmware.build),
+		Version: bulb.hostFirmware.version,
 	})
 }
 
