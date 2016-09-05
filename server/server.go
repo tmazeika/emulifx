@@ -3,8 +3,8 @@ package server
 import (
 	"encoding"
 	"github.com/bionicrm/emulifx/ui"
-	"gopkg.in/golifx/controlifx.v1"
-	"gopkg.in/golifx/implifx.v1"
+	"gopkg.in/lifx-tools/controlifx.v1"
+	"gopkg.in/lifx-tools/implifx.v1"
 	"log"
 	"net"
 	"time"
