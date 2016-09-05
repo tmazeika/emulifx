@@ -7,6 +7,6 @@ This graphical program attempts to replicate an actual LIFX device on the networ
 - [Installation](#installation)
 
 ## Installation
-If you have Go installed and `$GOPATH/bin` in your path, run `go get -u github.com/golifx/emulifx` and the `emulifx` binary will be available. Otherwise, [download the latest release](https://github.com/golifx/emulifx/releases) for your platform, unarchive it, and move the binary to some location in your path (try `/usr/bin/`). The GUI portion of this program requires CGO, meaning binaries will only be distributed for a limited number of platforms.
+If you have Go installed and `$GOPATH/bin` in your path, run `go get -u github.com/lifx-tools/emulifx` and the `emulifx` binary will be available. Otherwise, [download the latest release](https://github.com/lifx-tools/emulifx/releases) for your platform, unarchive it, and move the binary to some location in your path (try `/usr/bin/`). The GUI portion of this program requires CGO, meaning binaries will only be distributed for a limited number of platforms.
 
 Should you have issues with GLFW or OpenGL, see the read-me's for the [appropriate repository in go-gl](https://github.com/go-gl).
